@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Panel de modération</title>
+</head>
+<body>
+    <h1>Panel de modération</h1>
+
+    <h2>Utilisateurs</h2>
+    <table border="1">
+        <tr>
+            <th>ID</th><th>Nom</th><th>Email</th><th>Admin</th><th>Actions</th>
+        </tr>
+        {% for u in users %}
+        <tr>
+            <td>{{ u.id }}</td>
+            <td>{{ u.username }}</td>
+            <td>{{ u.email }}</td>
+            <td>{{ "✅" if u.is_admin else "❌" }}</td>
+            <td>
+                <a href="{{ url_for('ban_user', user_id=u.id) }}">Bannir</a> |
+                <a href="{{ url_for('promote_user', user_id=u.id) }}">Promouvoir</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>
