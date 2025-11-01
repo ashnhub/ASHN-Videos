@@ -1,66 +1,1419 @@
-import os
-from flask import Flask, request, render_template_string, url_for, redirect, abort, jsonify, flash
-from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
-from werkzeug.utils import secure_filename
-from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
-from supabase import create_client, Client
-import tempfile
-import uuid
+<div>
+            <label class="block text-sm font-medium mb-2 text-white">Email</label>
+            <input name="email" type="email" required 
+                   class="w-full px-4 py-3 bg-darker border border-dark rounded-lg text-white focus:border-red-600 focus:outline-none">
+        </div>
+        
+        <div>
+            <label class="block text-sm font-medium mb-2 text-white">Mot de passe</label>
+            <input name="password" type="password" required 
+                   class="w-full px-4 py-3 bg-darker border border-dark rounded-lg text-white focus:border-red-600 focus:outline-none">
+        </div>
+        
+        <button type="submit" class="w-full bg-red-600 text-white py-3 rounded-lg hover:bg-red-700 transition font-semibold">
+            {{ cta }}
+        </button>
+    </form>
+    
+    <div class="text-center mt-6">
+        {% if mode == 'login' %}
+            <p class="text-gray">Pas de compte ? <a href="{{ url_for('register') }}" class="text-red-500 hover:text-red-400 transition">S'inscrire</a></p>
+        {% else %}
+            <p class="text-gray">Déjà un compte ? <a href="{{ url_for('login') }}" class="text-red-500 hover:text-red-400 transition">Se connecter</a></p>
+        {% endif %}
+    </div>
+</main>
+"""
 
-# ------------------------------
-# Configuration de l'application Flask
-# ------------------------------
-
-app = Flask(__name__)
-
-# Configuration
-app.config.update(
-    SQLALCHEMY_DATABASE_URI=os.environ.get("DATABASE_URL", "sqlite:///ashn.db"),
-    SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    SECRET_KEY=os.environ.get("SECRET_KEY", "dev-ashn-secret-key-change-in-production"),
-    MAX_CONTENT_LENGTH=1024 * 1024 * 1024,  # 1 Go max
-    DEBUG=os.environ.get("DEBUG", "True") == "True",
-)
-
-# Fix pour PostgreSQL sur Render
-if app.config['SQLALCHEMY_DATABASE_URI'].startswith("postgres://"):
-    app.config['SQLALCHEMY_DATABASE_URI'] = app.config['SQLALCHEMY_DATABASE_URI'].replace("postgres://", "postgresql://", 1)
-
-# Initialisation Supabase
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "videos")
-
-supabase: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# Initialisation de la base de données
-db = SQLAlchemy(app)
-migrate = Migrate(app, db)
-
-# Initialisation de Flask-Login
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = "login"
+PROFIL_BODY = """
+<main class="container mx-auto px-4 py-8">
+    <div class="bg-dark rounded-lg p-6 mb-8">
+        <h1 class="text-3xl font-bold mb-4 text-white">Profil de {{ user.display_name }}</h1>
+        <div class="flex items-center space-x-6 text-gray">
+            <span><strong class="text-white">{{ videos|length }}</strong> vidéos</span>
+            <span>Membre depuis {{ user.created_at.strftime('%B %Y') }}</span>
+        </div>
+    </div>
+    
+    <h2 class="text-2xl font-semibold mb-6 text-white">Vidéos de {{ user.display_name }}</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {% for v in videos %}
+            <div class="bg-dark rounded-lg overflow-hidden hover:bg-gray-900 transition cursor-pointer">
+                <a href="{{ url_for('watch', video_id=v.id) }}">
+                    {% if v.thumb_url %}
+                        <img src="{{ v.thumb_url }}" alt="{{ v.title }}" class="w-full h-48 object-cover">
+                    {% else %}
+                        <div class="w-full h-48 bg-gray-800 flex items-center justify-center">
+                            <svg class="w-16 h-16 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
+                            </svg>
+                        </div>
+                    {% endif %}
+                </a>
+                <div class="p-4">
+                    <h3 class="font-semibold mb-2 text-white">{{ v.title }}</h3>
+                    <p class="text-gray text-sm">{{ v.created_at.strftime('%d %b %Y') }}</p>
+                    <p class="text-gray text-sm">{{ v.views or 0 }} vues</p>
+                </div>
+            </div>
+        {% else %}
+            <div class="col-span-full text-center py-12">
+                <svg class="w-24 h-24 mx-auto text-gray-700 mb-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
+                </svg>
+                <p class="text-gray text-lg">Aucune vidéo publiée.</p>
+            </div>
+        {% endfor %}
+    </div>
+</main>
+"""
 
 # -------------------------
-# Modèles
+# Routes principales
 # -------------------------
-class User(UserMixin, db.Model):
-    __tablename__ = "users"
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(255), unique=True, index=True, nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)
-    display_name = db.Column(db.String(120), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_admin = db.Column(db.Boolean, default=False)
+@app.get("/")
+def home():
+    try:
+        q = (request.args.get("q") or "").strip()
+        active_cat = request.args.get("cat") or CATEGORIES[0]["id"]
 
-    def set_password(self, raw):
-        self.password_hash = generate_password_hash(raw)
+        query = Video.query.filter_by(category=active_cat)
+        if q:
+            like = f"%{q}%"
+            query = query.filter(db.or_(Video.title.ilike(like), Video.creator.ilike(like)))
+        items = query.order_by(Video.created_at.desc()).limit(40).all()
+
+        body = render_template_string(
+            HOME_BODY,
+            q=q,
+            active_cat=active_cat,
+            items=items,
+            categories=CATEGORIES,
+            categories_map=CATEGORIES_MAP,
+        )
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="ASHN Vidéos — Accueil")
+    except Exception as e:
+        print(f"Erreur dans home(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.get("/watch/<int:video_id>")
+def watch(video_id: int):
+    try:
+        v = Video.query.get_or_404(video_id)
+        v.views = (v.views or 0) + 1
+        db.session.commit()
+
+        user_like = None
+        is_following = False
+        if current_user.is_authenticated:
+            user_like = Like.query.filter_by(user_id=current_user.id, video_id=video_id).first()
+            if v.user_id:
+                is_following = Follow.query.filter_by(
+                    follower_id=current_user.id, followed_id=v.user_id
+                ).first() is not None
+
+        more = (
+            Video.query.filter(Video.id != v.id, Video.category == v.category)
+            .order_by(Video.created_at.desc())
+            .limit(8)
+            .all()
+        )
+
+        comments = (
+            Comment.query
+            .filter(Comment.video_id == v.id)
+            .order_by(Comment.created_at.desc())
+            .all()
+        )
+
+        body = render_template_string(
+            WATCH_BODY,
+            video=v,
+            more=more,
+            comments=comments,
+            user_like=user_like,
+            is_following=is_following
+        )
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title=v.title)
+    except Exception as e:
+        print(f"Erreur dans watch(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.get("/upload")
+@login_required
+def upload_form():
+    try:
+        body = render_template_string(
+            UPLOAD_BODY, 
+            categories=CATEGORIES,
+            supabase_configured=bool(supabase)
+        )
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Téléverser — ASHN Vidéos")
+    except Exception as e:
+        print(f"Erreur dans upload_form(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.post("/upload")
+@login_required
+def upload_post():
+    try:
+        if not supabase:
+            flash("Supabase n'est pas configuré. Impossible d'uploader des vidéos.")
+            return redirect(url_for("upload_form"))
+
+        f = request.files.get("file")
+        title = (request.form.get("title") or "Sans titre").strip()
+        description = (request.form.get("description") or "").strip()
+        category = request.form.get("category") or "tendance"
+        creator = (request.form.get("creator") or current_user.display_name or "Anonyme").strip()
+
+        if not f or f.filename == "":
+            flash("Aucun fichier reçu")
+            return redirect(url_for("upload_form"))
+        if not allowed_file(f.filename):
+            flash("Extension non supportée")
+            return redirect(url_for("upload_form"))
+
+        file_data = f.read()
+        
+        try:
+            supabase_path = upload_to_supabase(file_data, f.filename)
+        except Exception as e:
+            flash(f"Erreur lors de l'upload vers Supabase: {str(e)}")
+            return redirect(url_for("upload_form"))
+
+        v = Video(
+            title=title,
+            description=description,
+            category=category if category in CATEGORIES_MAP else "tendance",
+            supabase_path=supabase_path,
+            thumb_url="https://picsum.photos/seed/ashn-" + str(uuid.uuid4())[:8] + "/640/360",
+            duration="",
+            creator=creator,
+            user_id=current_user.id,
+        )
+
+        db.session.add(v)
+        db.session.commit()
+
+        flash("Vidéo téléversée avec succès !")
+        return redirect(url_for("watch", video_id=v.id))
+    except Exception as e:
+        print(f"Erreur dans upload_post(): {e}")
+        flash(f"Erreur lors de l'upload: {e}")
+        return redirect(url_for("upload_form"))
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    try:
+        if request.method == "POST":
+            email = request.form.get("email", "").strip().lower()
+            password = request.form.get("password", "")
+            u = User.query.filter_by(email=email).first()
+            if not u or not u.check_password(password):
+                flash("Identifiants invalides")
+            else:
+                login_user(u)
+                return redirect(url_for("home"))
+        body = render_template_string(AUTH_BODY, heading="Connexion", cta="Se connecter", mode="login")
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Connexion — ASHN Vidéos")
+    except Exception as e:
+        print(f"Erreur dans login(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    try:
+        if request.method == "POST":
+            display_name = (request.form.get("display_name") or "").strip()
+            email = (request.form.get("email") or "").strip().lower()
+            password = request.form.get("password") or ""
+            if not display_name or not email or not password:
+                flash("Tous les champs sont requis")
+            elif User.query.filter_by(email=email).first():
+                flash("Cet email est déjà utilisé")
+            else:
+                u = User(email=email, display_name=display_name)
+                u.set_password(password)
+                db.session.add(u)
+                db.session.commit()
+                login_user(u)
+                return redirect(url_for("home"))
+        body = render_template_string(AUTH_BODY, heading="Créer un compte", cta="S'inscrire", mode="register")
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Inscription — ASHN Vidéos")
+    except Exception as e:
+        print(f"Erreur dans register(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.get("/logout")
+@login_required
+def logout():
+    try:
+        logout_user()
+        return redirect(url_for("home"))
+    except Exception as e:
+        print(f"Erreur dans logout(): {e}")
+        return redirect(url_for("home"))
+
+@app.post("/watch/<int:video_id>/comment")
+@login_required
+def comment_post(video_id: int):
+    try:
+        v = Video.query.get_or_404(video_id)
+        body = (request.form.get("body") or "").strip()
+        if not body:
+            flash("Commentaire vide")
+            return redirect(url_for("watch", video_id=v.id))
+        c = Comment(video_id=v.id, user_id=current_user.id, body=body)
+        db.session.add(c)
+        db.session.commit()
+        return redirect(url_for("watch", video_id=v.id))
+    except Exception as e:
+        print(f"Erreur dans comment_post(): {e}")
+        flash("Erreur lors de l'ajout du commentaire")
+        return redirect(url_for("watch", video_id=video_id))
+
+@app.get("/api/videos")
+def api_videos():
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+        per_page = min(max(int(request.args.get("per_page", 12)), 1), 50)
+        q = (request.args.get("q") or "").strip()
+        cat = request.args.get("cat") or None
+
+        query = Video.query
+        if cat:
+            query = query.filter_by(category=cat)
+        if q:
+            like = f"%{q}%"
+            query = query.filter(db.or_(Video.title.ilike(like), Video.creator.ilike(like)))
+
+        total = query.count()
+        items = (
+            query.order_by(Video.created_at.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return jsonify({
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "items": [
+                {
+                    "id": v.id,
+                    "title": v.title,
+                    "creator": v.creator,
+                    "category": v.category,
+                    "views": v.views,
+                    "thumb_url": v.thumb_url,
+                    "source_url": v.source_url,
+                    "created_at": v.created_at.isoformat(),
+                }
+                for v in items
+            ],
+        })
+    except Exception as e:
+        print(f"Erreur dans api_videos(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/video/like/<int:video_id>", methods=["POST"])
+@login_required
+def like_video(video_id):
+    try:
+        v = Video.query.get_or_404(video_id)
+        existing = Like.query.filter_by(user_id=current_user.id, video_id=v.id).first()
+        if existing:
+            if existing.is_like:
+                db.session.delete(existing)
+                v.likes = max((v.likes or 1) - 1, 0)
+            else:
+                existing.is_like = True
+                v.likes = (v.likes or 0) + 1
+                v.dislikes = max((v.dislikes or 1) - 1, 0)
+        else:
+            db.session.add(Like(user_id=current_user.id, video_id=v.id, is_like=True))
+            v.likes = (v.likes or 0) + 1
+        db.session.commit()
+        return jsonify({"likes": v.likes, "dislikes": v.dislikes})
+    except Exception as e:
+        print(f"Erreur dans like_video(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/video/dislike/<int:video_id>", methods=["POST"])
+@login_required
+def dislike_video(video_id):
+    try:
+        v = Video.query.get_or_404(video_id)
+        existing = Like.query.filter_by(user_id=current_user.id, video_id=v.id).first()
+        if existing:
+            if not existing.is_like:
+                db.session.delete(existing)
+                v.dislikes = max((v.dislikes or 1) - 1, 0)
+            else:
+                existing.is_like = False
+                v.dislikes = (v.dislikes or 0) + 1
+                v.likes = max((v.likes or 1) - 1, 0)
+        else:
+            db.session.add(Like(user_id=current_user.id, video_id=v.id, is_like=False))
+            v.dislikes = (v.dislikes or 0) + 1
+        db.session.commit()
+        return jsonify({"likes": v.likes, "dislikes": v.dislikes})
+    except Exception as e:
+        print(f"Erreur dans dislike_video(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/profil/<username>")
+def show_profil(username):
+    try:
+        user = User.query.filter_by(display_name=username).first_or_404()
+        videos = Video.query.filter_by(user_id=user.id).order_by(Video.created_at.desc()).all()
+        is_following = False
+        if current_user.is_authenticated:
+            is_following = Follow.query.filter_by(
+                follower_id=current_user.id,
+                followed_id=user.id
+            ).first() is not None
+        body = render_template_string(PROFIL_BODY, user=user, videos=videos, is_following=is_following)
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title=f"Profil de {user.display_name}")
+    except Exception as e:
+        print(f"Erreur dans show_profil(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.route("/follow/<int:user_id>", methods=["POST"])
+@login_required
+def follow_user(user_id):
+    try:
+        if user_id == current_user.id:
+            return jsonify({"error": "Vous ne pouvez pas vous suivre vous-même"}), 400
+        target_user = User.query.get_or_404(user_id)
+        existing = Follow.query.filter_by(follower_id=current_user.id, followed_id=user_id).first()
+        if existing:
+            db.session.delete(existing)
+            following = False
+        else:
+            db.session.add(Follow(follower_id=current_user.id, followed_id=user_id))
+            following = True
+        db.session.commit()
+        return jsonify({"following": following})
+    except Exception as e:
+        print(f"Erreur dans follow_user(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/admin/ban/<int:user_id>")
+@login_required
+def ban_user(user_id):
+    try:
+        if not current_user.is_admin:
+            flash("Accès refusé")
+            return redirect(url_for("home"))
+        user = User.query.get_or_404(user_id)
+        if user.id != current_user.id:
+            db.session.delete(user)
+            db.session.commit()
+            flash(f"Utilisateur {user.display_name} banni")
+        return redirect(url_for("home"))
+    except Exception as e:
+        print(f"Erreur dans ban_user(): {e}")
+        flash("Erreur lors du bannissement")
+        return redirect(url_for("home"))
+
+@app.route("/admin/promote/<int:user_id>")
+@login_required
+def promote_user(user_id):
+    try:
+        if not current_user.is_admin:
+            flash("Accès refusé")
+            return redirect(url_for("home"))
+        user = User.query.get_or_404(user_id)
+        user.is_admin = True
+        db.session.commit()
+        flash(f"Utilisateur {user.display_name} promu admin")
+        return redirect(url_for("home"))
+    except Exception as e:
+        print(f"Erreur dans promote_user(): {e}")
+        flash("Erreur lors de la promotion")
+        return redirect(url_for("home"))
+
+@app.errorhandler(404)
+def not_found_error(error):
+    body = "<main class='container mx-auto px-4 py-8 text-center'><h1 class='text-3xl font-bold text-white mb-4'>Page non trouvée</h1><p class='text-gray mb-6'>La page que vous recherchez n'existe pas.</p><p><a href='" + url_for('home') + "' class='bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition inline-block'>Retour à l'accueil</a></p></main>"
+    return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Erreur 404"), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    body = "<main class='container mx-auto px-4 py-8 text-center'><h1 class='text-3xl font-bold text-white mb-4'>Erreur interne</h1><p class='text-gray mb-6'>Une erreur s'est produite sur le serveur.</p><p><a href='" + url_for('home') + "' class='bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition inline-block'>Retour à l'accueil</a></p></main>"
+    return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Erreur 500"), 500
+
+@app.cli.command()
+def init_database():
+    """Initialise la base de données"""
+    init_db()
+
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=True, host='0.0.0.0', port=5000) hover:bg-gray-900 transition cursor-pointer">
+                <a href="{{ url_for('watch', video_id=v.id) }}">
+                    {% if v.thumb_url %}
+                        <img src="{{ v.thumb_url }}" alt="{{ v.title }}" class="w-full h-48 object-cover">
+                    {% else %}
+                        <div class="w-full h-48 bg-gray-800 flex items-center justify-center">
+                            <svg class="w-16 h-16 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
+                            </svg>
+                        </div>
+                    {% endif %}
+                </a>
+                <div class="p-4">
+                    <h3 class="font-semibold mb-2 text-white">{{ v.title }}</h3>
+                    <p class="text-gray text-sm">{{ v.created_at.strftime('%d %b %Y') }}</p>
+                    <p class="text-gray text-sm">{{ v.views or 0 }} vues</p>
+                </div>
+            </div>
+        {% else %}
+            <div class="col-span-full text-center py-12">
+                <svg class="w-24 h-24 mx-auto text-gray-700 mb-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
+                </svg>
+                <p class="text-gray text-lg">Aucune vidéo publiée.</p>
+            </div>
+        {% endfor %}
+    </div>
+</main>
+"""
+
+# -------------------------
+# Routes principales
+# -------------------------
+@app.get("/")
+def home():
+    try:
+        q = (request.args.get("q") or "").strip()
+        active_cat = request.args.get("cat") or CATEGORIES[0]["id"]
+
+        query = Video.query.filter_by(category=active_cat)
+        if q:
+            like = f"%{q}%"
+            query = query.filter(db.or_(Video.title.ilike(like), Video.creator.ilike(like)))
+        items = query.order_by(Video.created_at.desc()).limit(40).all()
+
+        body = render_template_string(
+            HOME_BODY,
+            q=q,
+            active_cat=active_cat,
+            items=items,
+            categories=CATEGORIES,
+            categories_map=CATEGORIES_MAP,
+        )
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="ASHN Vidéos — Accueil")
+    except Exception as e:
+        print(f"Erreur dans home(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.get("/watch/<int:video_id>")
+def watch(video_id: int):
+    try:
+        v = Video.query.get_or_404(video_id)
+        v.views = (v.views or 0) + 1
+        db.session.commit()
+
+        user_like = None
+        is_following = False
+        if current_user.is_authenticated:
+            user_like = Like.query.filter_by(user_id=current_user.id, video_id=video_id).first()
+            if v.user_id:
+                is_following = Follow.query.filter_by(
+                    follower_id=current_user.id, followed_id=v.user_id
+                ).first() is not None
+
+        more = (
+            Video.query.filter(Video.id != v.id, Video.category == v.category)
+            .order_by(Video.created_at.desc())
+            .limit(8)
+            .all()
+        )
+
+        comments = (
+            Comment.query
+            .filter(Comment.video_id == v.id)
+            .order_by(Comment.created_at.desc())
+            .all()
+        )
+
+        body = render_template_string(
+            WATCH_BODY,
+            video=v,
+            more=more,
+            comments=comments,
+            user_like=user_like,
+            is_following=is_following
+        )
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title=v.title)
+    except Exception as e:
+        print(f"Erreur dans watch(): {e}")
+        return f"Erreur: {e}", 500
+
+# -------------------------
+# Upload avec Supabase
+# -------------------------
+@app.get("/upload")
+@login_required
+def upload_form():
+    try:
+        body = render_template_string(
+            UPLOAD_BODY, 
+            categories=CATEGORIES,
+            supabase_configured=bool(supabase)
+        )
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Téléverser — ASHN Vidéos")
+    except Exception as e:
+        print(f"Erreur dans upload_form(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.post("/upload")
+@login_required
+def upload_post():
+    try:
+        if not supabase:
+            flash("Supabase n'est pas configuré. Impossible d'uploader des vidéos.")
+            return redirect(url_for("upload_form"))
+
+        f = request.files.get("file")
+        title = (request.form.get("title") or "Sans titre").strip()
+        description = (request.form.get("description") or "").strip()
+        category = request.form.get("category") or "tendance"
+        creator = (request.form.get("creator") or current_user.display_name or "Anonyme").strip()
+
+        if not f or f.filename == "":
+            flash("Aucun fichier reçu")
+            return redirect(url_for("upload_form"))
+        if not allowed_file(f.filename):
+            flash("Extension non supportée")
+            return redirect(url_for("upload_form"))
+
+        # Lire le fichier en mémoire
+        file_data = f.read()
+        
+        # Upload vers Supabase
+        try:
+            supabase_path = upload_to_supabase(file_data, f.filename)
+        except Exception as e:
+            flash(f"Erreur lors de l'upload vers Supabase: {str(e)}")
+            return redirect(url_for("upload_form"))
+
+        # Créer l'entrée en base de données
+        v = Video(
+            title=title,
+            description=description,
+            category=category if category in CATEGORIES_MAP else "tendance",
+            supabase_path=supabase_path,
+            thumb_url="https://picsum.photos/seed/ashn-" + str(uuid.uuid4())[:8] + "/640/360",
+            duration="",
+            creator=creator,
+            user_id=current_user.id,
+        )
+
+        db.session.add(v)
+        db.session.commit()
+
+        flash("Vidéo téléversée avec succès !")
+        return redirect(url_for("watch", video_id=v.id))
+    except Exception as e:
+        print(f"Erreur dans upload_post(): {e}")
+        flash(f"Erreur lors de l'upload: {e}")
+        return redirect(url_for("upload_form"))
+
+# -------------------------
+# Authentification
+# -------------------------
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    try:
+        if request.method == "POST":
+            email = request.form.get("email", "").strip().lower()
+            password = request.form.get("password", "")
+            u = User.query.filter_by(email=email).first()
+            if not u or not u.check_password(password):
+                flash("Identifiants invalides")
+            else:
+                login_user(u)
+                return redirect(url_for("home"))
+        body = render_template_string(AUTH_BODY, heading="Connexion", cta="Se connecter", mode="login")
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Connexion — ASHN Vidéos")
+    except Exception as e:
+        print(f"Erreur dans login(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    try:
+        if request.method == "POST":
+            display_name = (request.form.get("display_name") or "").strip()
+            email = (request.form.get("email") or "").strip().lower()
+            password = request.form.get("password") or ""
+            if not display_name or not email or not password:
+                flash("Tous les champs sont requis")
+            elif User.query.filter_by(email=email).first():
+                flash("Cet email est déjà utilisé")
+            else:
+                u = User(email=email, display_name=display_name)
+                u.set_password(password)
+                db.session.add(u)
+                db.session.commit()
+                login_user(u)
+                return redirect(url_for("home"))
+        body = render_template_string(AUTH_BODY, heading="Créer un compte", cta="S'inscrire", mode="register")
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Inscription — ASHN Vidéos")
+    except Exception as e:
+        print(f"Erreur dans register(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.get("/logout")
+@login_required
+def logout():
+    try:
+        logout_user()
+        return redirect(url_for("home"))
+    except Exception as e:
+        print(f"Erreur dans logout(): {e}")
+        return redirect(url_for("home"))
+
+# -------------------------
+# Commentaires
+# -------------------------
+@app.post("/watch/<int:video_id>/comment")
+@login_required
+def comment_post(video_id: int):
+    try:
+        v = Video.query.get_or_404(video_id)
+        body = (request.form.get("body") or "").strip()
+        if not body:
+            flash("Commentaire vide")
+            return redirect(url_for("watch", video_id=v.id))
+        c = Comment(video_id=v.id, user_id=current_user.id, body=body)
+        db.session.add(c)
+        db.session.commit()
+        return redirect(url_for("watch", video_id=v.id))
+    except Exception as e:
+        print(f"Erreur dans comment_post(): {e}")
+        flash("Erreur lors de l'ajout du commentaire")
+        return redirect(url_for("watch", video_id=video_id))
+
+# -------------------------
+# API minimale
+# -------------------------
+@app.get("/api/videos")
+def api_videos():
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+        per_page = min(max(int(request.args.get("per_page", 12)), 1), 50)
+        q = (request.args.get("q") or "").strip()
+        cat = request.args.get("cat") or None
+
+        query = Video.query
+        if cat:
+            query = query.filter_by(category=cat)
+        if q:
+            like = f"%{q}%"
+            query = query.filter(db.or_(Video.title.ilike(like), Video.creator.ilike(like)))
+
+        total = query.count()
+        items = (
+            query.order_by(Video.created_at.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return jsonify({
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "items": [
+                {
+                    "id": v.id,
+                    "title": v.title,
+                    "creator": v.creator,
+                    "category": v.category,
+                    "views": v.views,
+                    "thumb_url": v.thumb_url,
+                    "source_url": v.source_url,
+                    "created_at": v.created_at.isoformat(),
+                }
+                for v in items
+            ],
+        })
+    except Exception as e:
+        print(f"Erreur dans api_videos(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+# -------------------------
+# Routes pour les likes/dislikes
+# -------------------------
+@app.route("/video/like/<int:video_id>", methods=["POST"])
+@login_required
+def like_video(video_id):
+    try:
+        v = Video.query.get_or_404(video_id)
+
+        existing = Like.query.filter_by(user_id=current_user.id, video_id=v.id).first()
+        if existing:
+            if existing.is_like:
+                db.session.delete(existing)
+                v.likes = max((v.likes or 1) - 1, 0)
+            else:
+                existing.is_like = True
+                v.likes = (v.likes or 0) + 1
+                v.dislikes = max((v.dislikes or 1) - 1, 0)
+        else:
+            db.session.add(Like(user_id=current_user.id, video_id=v.id, is_like=True))
+            v.likes = (v.likes or 0) + 1
+
+        db.session.commit()
+        return jsonify({"likes": v.likes, "dislikes": v.dislikes})
+    except Exception as e:
+        print(f"Erreur dans like_video(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/video/dislike/<int:video_id>", methods=["POST"])
+@login_required
+def dislike_video(video_id):
+    try:
+        v = Video.query.get_or_404(video_id)
+
+        existing = Like.query.filter_by(user_id=current_user.id, video_id=v.id).first()
+        if existing:
+            if not existing.is_like:
+                db.session.delete(existing)
+                v.dislikes = max((v.dislikes or 1) - 1, 0)
+            else:
+                existing.is_like = False
+                v.dislikes = (v.dislikes or 0) + 1
+                v.likes = max((v.likes or 1) - 1, 0)
+        else:
+            db.session.add(Like(user_id=current_user.id, video_id=v.id, is_like=False))
+            v.dislikes = (v.dislikes or 0) + 1
+
+        db.session.commit()
+        return jsonify({"likes": v.likes, "dislikes": v.dislikes})
+    except Exception as e:
+        print(f"Erreur dans dislike_video(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+# -------------------------
+# Route profil utilisateur
+# -------------------------
+@app.route("/profil/<username>")
+def show_profil(username):
+    try:
+        user = User.query.filter_by(display_name=username).first_or_404()
+        videos = Video.query.filter_by(user_id=user.id).order_by(Video.created_at.desc()).all()
+
+        is_following = False
+        if current_user.is_authenticated:
+            is_following = Follow.query.filter_by(
+                follower_id=current_user.id,
+                followed_id=user.id
+            ).first() is not None
+
+        body = render_template_string(PROFIL_BODY, user=user, videos=videos, is_following=is_following)
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title=f"Profil de {user.display_name}")
+    except Exception as e:
+        print(f"Erreur dans show_profil(): {e}")
+        return f"Erreur: {e}", 500
+
+# -------------------------
+# Route pour suivre/ne plus suivre
+# -------------------------
+@app.route("/follow/<int:user_id>", methods=["POST"])
+@login_required
+def follow_user(user_id):
+    try:
+        if user_id == current_user.id:
+            return jsonify({"error": "Vous ne pouvez pas vous suivre vous-même"}), 400
+        
+        target_user = User.query.get_or_404(user_id)
+        existing = Follow.query.filter_by(follower_id=current_user.id, followed_id=user_id).first()
+        
+        if existing:
+            db.session.delete(existing)
+            following = False
+        else:
+            db.session.add(Follow(follower_id=current_user.id, followed_id=user_id))
+            following = True
+        
+        db.session.commit()
+        return jsonify({"following": following})
+    except Exception as e:
+        print(f"Erreur dans follow_user(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+# -------------------------
+# Routes admin
+# -------------------------
+@app.route("/admin/ban/<int:user_id>")
+@login_required
+def ban_user(user_id):
+    try:
+        if not current_user.is_admin:
+            flash("Accès refusé")
+            return redirect(url_for("home"))
+        
+        user = User.query.get_or_404(user_id)
+        if user.id != current_user.id:
+            db.session.delete(user)
+            db.session.commit()
+            flash(f"Utilisateur {user.display_name} banni")
+        
+        return redirect(url_for("home"))
+    except Exception as e:
+        print(f"Erreur dans ban_user(): {e}")
+        flash("Erreur lors du bannissement")
+        return redirect(url_for("home"))
+
+@app.route("/admin/promote/<int:user_id>")
+@login_required
+def promote_user(user_id):
+    try:
+        if not current_user.is_admin:
+            flash("Accès refusé")
+            return redirect(url_for("home"))
+        
+        user = User.query.get_or_404(user_id)
+        user.is_admin = True
+        db.session.commit()
+        flash(f"Utilisateur {user.display_name} promu admin")
+        
+        return redirect(url_for("home"))
+    except Exception as e:
+        print(f"Erreur dans promote_user(): {e}")
+        flash("Erreur lors de la promotion")
+        return redirect(url_for("home"))
+
+# -------------------------
+# Gestion d'erreurs
+# -------------------------
+@app.errorhandler(404)
+def not_found_error(error):
+    body = "<main class='container mx-auto px-4 py-8 text-center'><h1 class='text-3xl font-bold text-white mb-4'>Page non trouvée</h1><p class='text-gray mb-6'>La page que vous recherchez n'existe pas.</p><p><a href='" + url_for('home') + "' class='bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition inline-block'>Retour à l'accueil</a></p></main>"
+    return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Erreur 404"), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    body = "<main class='container mx-auto px-4 py-8 text-center'><h1 class='text-3xl font-bold text-white mb-4'>Erreur interne</h1><p class='text-gray mb-6'>Une erreur s'est produite sur le serveur.</p><p><a href='" + url_for('home') + "' class='bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition inline-block'>Retour à l'accueil</a></p></main>"
+    return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Erreur 500"), 500
+
+# -------------------------
+# Commande CLI pour initialiser la DB
+# -------------------------
+@app.cli.command()
+def init_database():
+    """Initialise la base de données"""
+    init_db()
+
+# -------------------------
+# Entrée app
+# -------------------------
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=True, host='0.0.0.0', port=5000) transition cursor-pointer">
+                <a href="{{ url_for('watch', video_id=v.id) }}">
+                    {% if v.thumb_url %}
+                        <img src="{{ v.thumb_url }}" alt="{{ v.title }}" class="w-full h-48 object-cover">
+                    {% else %}
+                        <div class="w-full h-48 bg-gray-800 flex items-center justify-center">
+                            <svg class="w-16 h-16 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
+                            </svg>
+                        </div>
+                    {% endif %}
+                </a>
+                <div class="p-4">
+                    <h3 class="font-semibold mb-2 text-white">{{ v.title }}</h3>
+                    <p class="text-gray text-sm">{{ v.created_at.strftime('%d %b %Y') }}</p>
+                    <p class="text-gray text-sm">{{ v.views or 0 }} vues</p>
+                </div>
+            </div>
+        {% else %}
+            <div class="col-span-full text-center py-12">
+                <svg class="w-24 h-24 mx-auto text-gray-700 mb-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"/>
+                </svg>
+                <p class="text-gray text-lg">Aucune vidéo publiée.</p>
+            </div>
+        {% endfor %}
+    </div>
+</main>
+"""
+
+# -------------------------
+# Routes principales
+# -------------------------
+@app.get("/")
+def home():
+    try:
+        q = (request.args.get("q") or "").strip()
+        active_cat = request.args.get("cat") or CATEGORIES[0]["id"]
+
+        query = Video.query.filter_by(category=active_cat)
+        if q:
+            like = f"%{q}%"
+            query = query.filter(db.or_(Video.title.ilike(like), Video.creator.ilike(like)))
+        items = query.order_by(Video.created_at.desc()).limit(40).all()
+
+        body = render_template_string(
+            HOME_BODY,
+            q=q,
+            active_cat=active_cat,
+            items=items,
+            categories=CATEGORIES,
+            categories_map=CATEGORIES_MAP,
+        )
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="ASHN Vidéos — Accueil")
+    except Exception as e:
+        print(f"Erreur dans home(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.get("/watch/<int:video_id>")
+def watch(video_id: int):
+    try:
+        v = Video.query.get_or_404(video_id)
+        v.views = (v.views or 0) + 1
+        db.session.commit()
+
+        user_like = None
+        is_following = False
+        if current_user.is_authenticated:
+            user_like = Like.query.filter_by(user_id=current_user.id, video_id=video_id).first()
+            if v.user_id:
+                is_following = Follow.query.filter_by(
+                    follower_id=current_user.id, followed_id=v.user_id
+                ).first() is not None
+
+        more = (
+            Video.query.filter(Video.id != v.id, Video.category == v.category)
+            .order_by(Video.created_at.desc())
+            .limit(8)
+            .all()
+        )
+
+        comments = (
+            Comment.query
+            .filter(Comment.video_id == v.id)
+            .order_by(Comment.created_at.desc())
+            .all()
+        )
+
+        body = render_template_string(
+            WATCH_BODY,
+            video=v,
+            more=more,
+            comments=comments,
+            user_like=user_like,
+            is_following=is_following
+        )
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title=v.title)
+    except Exception as e:
+        print(f"Erreur dans watch(): {e}")
+        return f"Erreur: {e}", 500
+
+# -------------------------
+# Upload + HLS
+# -------------------------
+@app.get("/upload")
+@login_required
+def upload_form():
+    try:
+        body = render_template_string(UPLOAD_BODY, categories=CATEGORIES)
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Téléverser — ASHN Vidéos")
+    except Exception as e:
+        print(f"Erreur dans upload_form(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.post("/upload")
+@login_required
+def upload_post():
+    try:
+        f = request.files.get("file")
+        title = (request.form.get("title") or "Sans titre").strip()
+        description = (request.form.get("description") or "").strip()
+        category = request.form.get("category") or "tendance"
+        creator = (request.form.get("creator") or current_user.display_name or "Anonyme").strip()
+        to_hls = request.form.get("to_hls") is not None
+
+        if not f or f.filename == "":
+            flash("Aucun fichier reçu")
+            return redirect(url_for("upload_form"))
+        if not allowed_file(f.filename):
+            flash("Extension non supportée")
+            return redirect(url_for("upload_form"))
+
+        filename = secure_filename(f.filename)
+        base, ext = os.path.splitext(filename)
+        counter = 1
+        final = filename
+        while os.path.exists(os.path.join(UPLOAD_DIR, final)):
+            final = f"{base}-{counter}{ext}"
+            counter += 1
+
+        file_path = os.path.join(UPLOAD_DIR, final)
+        f.save(file_path)
+
+        v = Video(
+            title=title,
+            description=description,
+            category=category if category in CATEGORIES_MAP else "tendance",
+            filename=final,
+            thumb_url="https://picsum.photos/seed/ashn-" + base + "/640/360",
+            duration="",
+            creator=creator,
+            user_id=current_user.id,
+        )
+
+        if to_hls and ffmpeg_exists():
+            target_dir = os.path.join(HLS_DIR, f"video_{datetime.utcnow().timestamp():.0f}")
+            try:
+                rel_master = transcode_to_hls(file_path, target_dir)
+                v.hls_manifest = rel_master
+            except Exception as e:
+                print(f"Erreur transcodage HLS: {e}")
+                flash("Transcodage HLS échoué — lecture MP4 directe utilisée.")
+
+        db.session.add(v)
+        db.session.commit()
+
+        return redirect(url_for("watch", video_id=v.id))
+    except Exception as e:
+        print(f"Erreur dans upload_post(): {e}")
+        flash(f"Erreur lors de l'upload: {e}")
+        return redirect(url_for("upload_form"))
+
+@app.get("/media/<path:filename>")
+def media(filename):
+    try:
+        return send_from_directory(UPLOAD_DIR, filename, as_attachment=False)
+    except Exception as e:
+        print(f"Erreur dans media(): {e}")
+        abort(404)
+
+@app.get("/hls/<path:filename>")
+def hls(filename):
+    try:
+        return send_from_directory(HLS_DIR, filename, as_attachment=False)
+    except Exception as e:
+        print(f"Erreur dans hls(): {e}")
+        abort(404)
+
+# -------------------------
+# Authentification
+# -------------------------
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    try:
+        if request.method == "POST":
+            email = request.form.get("email", "").strip().lower()
+            password = request.form.get("password", "")
+            u = User.query.filter_by(email=email).first()
+            if not u or not u.check_password(password):
+                flash("Identifiants invalides")
+            else:
+                login_user(u)
+                return redirect(url_for("home"))
+        body = render_template_string(AUTH_BODY, heading="Connexion", cta="Se connecter", mode="login")
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Connexion — ASHN Vidéos")
+    except Exception as e:
+        print(f"Erreur dans login(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    try:
+        if request.method == "POST":
+            display_name = (request.form.get("display_name") or "").strip()
+            email = (request.form.get("email") or "").strip().lower()
+            password = request.form.get("password") or ""
+            if not display_name or not email or not password:
+                flash("Tous les champs sont requis")
+            elif User.query.filter_by(email=email).first():
+                flash("Cet email est déjà utilisé")
+            else:
+                u = User(email=email, display_name=display_name)
+                u.set_password(password)
+                db.session.add(u)
+                db.session.commit()
+                login_user(u)
+                return redirect(url_for("home"))
+        body = render_template_string(AUTH_BODY, heading="Créer un compte", cta="S'inscrire", mode="register")
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Inscription — ASHN Vidéos")
+    except Exception as e:
+        print(f"Erreur dans register(): {e}")
+        return f"Erreur: {e}", 500
+
+@app.get("/logout")
+@login_required
+def logout():
+    try:
+        logout_user()
+        return redirect(url_for("home"))
+    except Exception as e:
+        print(f"Erreur dans logout(): {e}")
+        return redirect(url_for("home"))
+
+# -------------------------
+# Commentaires
+# -------------------------
+@app.post("/watch/<int:video_id>/comment")
+@login_required
+def comment_post(video_id: int):
+    try:
+        v = Video.query.get_or_404(video_id)
+        body = (request.form.get("body") or "").strip()
+        if not body:
+            flash("Commentaire vide")
+            return redirect(url_for("watch", video_id=v.id))
+        c = Comment(video_id=v.id, user_id=current_user.id, body=body)
+        db.session.add(c)
+        db.session.commit()
+        return redirect(url_for("watch", video_id=v.id))
+    except Exception as e:
+        print(f"Erreur dans comment_post(): {e}")
+        flash("Erreur lors de l'ajout du commentaire")
+        return redirect(url_for("watch", video_id=video_id))
+
+# -------------------------
+# API minimale
+# -------------------------
+@app.get("/api/videos")
+def api_videos():
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+        per_page = min(max(int(request.args.get("per_page", 12)), 1), 50)
+        q = (request.args.get("q") or "").strip()
+        cat = request.args.get("cat") or None
+
+        query = Video.query
+        if cat:
+            query = query.filter_by(category=cat)
+        if q:
+            like = f"%{q}%"
+            query = query.filter(db.or_(Video.title.ilike(like), Video.creator.ilike(like)))
+
+        total = query.count()
+        items = (
+            query.order_by(Video.created_at.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return jsonify({
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "items": [
+                {
+                    "id": v.id,
+                    "title": v.title,
+                    "creator": v.creator,
+                    "category": v.category,
+                    "views": v.views,
+                    "thumb_url": v.thumb_url,
+                    "source_url": v.source_url,
+                    "hls": bool(v.hls_manifest),
+                    "created_at": v.created_at.isoformat(),
+                }
+                for v in items
+            ],
+        })
+    except Exception as e:
+        print(f"Erreur dans api_videos(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+# -------------------------
+# Routes pour les likes/dislikes
+# -------------------------
+@app.route("/video/like/<int:video_id>", methods=["POST"])
+@login_required
+def like_video(video_id):
+    try:
+        v = Video.query.get_or_404(video_id)
+
+        existing = Like.query.filter_by(user_id=current_user.id, video_id=v.id).first()
+        if existing:
+            if existing.is_like:
+                db.session.delete(existing)
+                v.likes = max((v.likes or 1) - 1, 0)
+            else:
+                existing.is_like = True
+                v.likes = (v.likes or 0) + 1
+                v.dislikes = max((v.dislikes or 1) - 1, 0)
+        else:
+            db.session.add(Like(user_id=current_user.id, video_id=v.id, is_like=True))
+            v.likes = (v.likes or 0) + 1
+
+        db.session.commit()
+        return jsonify({"likes": v.likes, "dislikes": v.dislikes})
+    except Exception as e:
+        print(f"Erreur dans like_video(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/video/dislike/<int:video_id>", methods=["POST"])
+@login_required
+def dislike_video(video_id):
+    try:
+        v = Video.query.get_or_404(video_id)
+
+        existing = Like.query.filter_by(user_id=current_user.id, video_id=v.id).first()
+        if existing:
+            if not existing.is_like:
+                db.session.delete(existing)
+                v.dislikes = max((v.dislikes or 1) - 1, 0)
+            else:
+                existing.is_like = False
+                v.dislikes = (v.dislikes or 0) + 1
+                v.likes = max((v.likes or 1) - 1, 0)
+        else:
+            db.session.add(Like(user_id=current_user.id, video_id=v.id, is_like=False))
+            v.dislikes = (v.dislikes or 0) + 1
+
+        db.session.commit()
+        return jsonify({"likes": v.likes, "dislikes": v.dislikes})
+    except Exception as e:
+        print(f"Erreur dans dislike_video(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+# -------------------------
+# Route profil utilisateur
+# -------------------------
+@app.route("/profil/<username>")
+def show_profil(username):
+    try:
+        user = User.query.filter_by(display_name=username).first_or_404()
+        videos = Video.query.filter_by(user_id=user.id).order_by(Video.created_at.desc()).all()
+
+        is_following = False
+        if current_user.is_authenticated:
+            is_following = Follow.query.filter_by(
+                follower_id=current_user.id,
+                followed_id=user.id
+            ).first() is not None
+
+        body = render_template_string(PROFIL_BODY, user=user, videos=videos, is_following=is_following)
+        return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title=f"Profil de {user.display_name}")
+    except Exception as e:
+        print(f"Erreur dans show_profil(): {e}")
+        return f"Erreur: {e}", 500
+
+# -------------------------
+# Route pour suivre/ne plus suivre
+# -------------------------
+@app.route("/follow/<int:user_id>", methods=["POST"])
+@login_required
+def follow_user(user_id):
+    try:
+        if user_id == current_user.id:
+            return jsonify({"error": "Vous ne pouvez pas vous suivre vous-même"}), 400
+        
+        target_user = User.query.get_or_404(user_id)
+        existing = Follow.query.filter_by(follower_id=current_user.id, followed_id=user_id).first()
+        
+        if existing:
+            db.session.delete(existing)
+            following = False
+        else:
+            db.session.add(Follow(follower_id=current_user.id, followed_id=user_id))
+            following = True
+        
+        db.session.commit()
+        return jsonify({"following": following})
+    except Exception as e:
+        print(f"Erreur dans follow_user(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+# -------------------------
+# Routes admin
+# -------------------------
+@app.route("/admin/ban/<int:user_id>")
+@login_required
+def ban_user(user_id):
+    try:
+        if not current_user.is_admin:
+            flash("Accès refusé")
+            return redirect(url_for("home"))
+        
+        user = User.query.get_or_404(user_id)
+        if user.id != current_user.id:
+            db.session.delete(user)
+            db.session.commit()
+            flash(f"Utilisateur {user.display_name} banni")
+        
+        return redirect(url_for("home"))
+    except Exception as e:
+        print(f"Erreur dans ban_user(): {e}")
+        flash("Erreur lors du bannissement")
+        return redirect(url_for("home"))
+
+@app.route("/admin/promote/<int:user_id>")
+@login_required
+def promote_user(user_id):
+    try:
+        if not current_user.is_admin:
+            flash("Accès refusé")
+            return redirect(url_for("home"))
+        
+        user = User.query.get_or_404(user_id)
+        user.is_admin = True
+        db.session.commit()
+        flash(f"Utilisateur {user.display_name} promu admin")
+        
+        return redirect(url_for("home"))
+    except Exception as e:
+        print(f"Erreur dans promote_user(): {e}")
+        flash("Erreur lors de la promotion")
+        return redirect(url_for("home"))
+
+# -------------------------
+# Route favicon
+# -------------------------
+@app.route('/favicon.ico')
+def favicon():
+    try:
+        favicon_path = os.path.join(BASE_DIR, "favicon.ico")
+        if not os.path.exists(favicon_path):
+            img = Image.new('RGB', (32, 32), color='#dc2626')
+            img.save(favicon_path, format="ICO")
+        return send_file(favicon_path, mimetype='image/x-icon')
+    except Exception:
+        return '', 204
+
+# -------------------------
+# Gestion d'erreurs
+# -------------------------
+@app.errorhandler(404)
+def not_found_error(error):
+    body = "<main class='container mx-auto px-4 py-8 text-center'><h1 class='text-3xl font-bold text-white mb-4'>Page non trouvée</h1><p class='text-gray mb-6'>La page que vous recherchez n'existe pas.</p><p><a href='" + url_for('home') + "' class='bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition inline-block'>Retour à l'accueil</a></p></main>"
+    return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Erreur 404"), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    body = "<main class='container mx-auto px-4 py-8 text-center'><h1 class='text-3xl font-bold text-white mb-4'>Erreur interne</h1><p class='text-gray mb-6'>Une erreur s'est produite sur le serveur.</p><p><a href='" + url_for('home') + "' class='bg-red-600 text-white px-6 py-3 rounded-lg hover:bg-red-700 transition inline-block'>Retour à l'accueil</a></p></main>"
+    return render_template_string(BASE_HTML, body=body, year=datetime.utcnow().year, title="Erreur 500"), 500
+
+# -------------------------
+# Commande CLI pour initialiser la DB
+# -------------------------
+@app.cli.command()
+def init_database():
+    """Initialise la base de données"""
+    init_db()
+
+# -------------------------
+# Entrée app
+# -------------------------
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=True, host='0.0.0.0', port=5000)        self.password_hash = generate_password_hash(raw)
 
     def check_password(self, raw) -> bool:
         return check_password_hash(self.password_hash, raw)
