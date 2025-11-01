@@ -7,3 +7,4 @@ gunicorn
 psycopg2-binary
 Flask-Migrate==4.0.5
 supabase
+pillow
